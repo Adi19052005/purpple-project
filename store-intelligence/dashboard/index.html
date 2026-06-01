@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Apex Eye - Store Intelligence Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body class="bg-gray-950 text-gray-100 min-h-screen font-sans">
+    <header class="border-b border-gray-800 bg-gray-900 px-6 py-4 flex justify-between items-center">
+        <div class="flex items-center space-x-3">
+            <div class="h-3 w-3 rounded-full bg-emerald-500 animate-pulse"></div>
+            <h1 class="text-xl font-bold tracking-tight text-white">PROJECT APEXEYE // LIVE STREAM</h1>
+        </div>
+        <div class="text-sm text-gray-400 bg-gray-800 px-3 py-1 rounded border border-gray-700">
+            Target Unit: <span id="active-store-id" class="text-emerald-400 font-mono font-bold">STORE_BLR_002</span>
+        </div>
+    </header>
+
+    <main class="p-6 max-w-7xl mx-auto space-y-6">
+        <section class="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <div class="bg-gray-900 border border-gray-800 p-5 rounded-lg">
+                <p class="text-xs font-semibold uppercase tracking-wider text-gray-400">Unique Traffic</p>
+                <h3 id="stat-traffic" class="text-3xl font-mono font-bold text-white mt-2">0</h3>
+            </div>
+            <div class="bg-gray-900 border border-gray-800 p-5 rounded-lg">
+                <p class="text-xs font-semibold uppercase tracking-wider text-gray-400">POS Sales Transactions</p>
+                <h3 id="stat-sales" class="text-3xl font-mono font-bold text-white mt-2">0</h3>
+            </div>
+            <div class="bg-gray-900 border border-gray-800 p-5 rounded-lg">
+                <p class="text-xs font-semibold uppercase tracking-wider text-gray-400">Conversion Rate</p>
+                <h3 id="stat-conversion" class="text-3xl font-mono font-bold text-emerald-400 mt-2">0.0%</h3>
+            </div>
+            <div class="bg-gray-900 border border-gray-800 p-5 rounded-lg">
+                <p class="text-xs font-semibold uppercase tracking-wider text-gray-400">Live Queue Depth</p>
+                <h3 id="stat-queue" class="text-3xl font-mono font-bold text-amber-500 mt-2">0</h3>
+            </div>
+        </section>
+
+        <section class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <div class="lg:col-span-2 bg-gray-900 border border-gray-800 p-6 rounded-lg flex flex-col">
+                <h2 class="text-sm font-semibold uppercase tracking-wider text-gray-300 mb-4">Journey Funnel Drop-offs</h2>
+                <div class="relative flex-grow h-64">
+                    <canvas id="funnelChart"></canvas>
+                </div>
+            </div>
+            
+            <div class="bg-gray-900 border border-gray-800 p-6 rounded-lg flex flex-col h-[320px]">
+                <h2 class="text-sm font-semibold uppercase tracking-wider text-gray-300 mb-4">Live Event Telemetry Log</h2>
+                <div id="log-feed" class="flex-grow overflow-y-auto space-y-2 font-mono text-xs text-gray-400 pr-2 scrollbar-thin">
+                    <div class="text-gray-500 italic">Awaiting connection initialization to Kafka stream...</div>
+                </div>
+            </div>
+        </section>
+
+        <section class="bg-gray-900 border border-gray-800 p-6 rounded-lg">
+            <h2 class="text-sm font-semibold uppercase tracking-wider text-red-400 mb-4 flex items-center space-x-2">
+                <span>⚠️ Operational Exceptions & Anomalies</span>
+            </h2>
+            <div id="anomaly-container" class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div class="text-sm text-gray-500 italic p-4 bg-gray-950 rounded border border-gray-800">
+                    No active behavioral anomalies or metric threshold breaks detected in this window.
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <script src="app.js"></script>
+</body>
+</html>
