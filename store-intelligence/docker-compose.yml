@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
 
   cv-pipeline:
@@ -13,9 +11,10 @@ services:
       kafka-broker:
         condition: service_healthy
     volumes:
-      - ./data:/app/data
+      - ./data:/app/data:cached
     networks:
       - apex-mesh-network
+    restart: unless-stopped
   # 1. High-Performance Cold Storage Ledger Database
   postgres-db:
     image: postgres:16-alpine
@@ -35,6 +34,7 @@ services:
       interval: 3s
       timeout: 3s
       retries: 5
+    restart: unless-stopped
 
   # 2. Hot-Path In-Memory State Cache & PubSub Coordinator
   redis-cache:
@@ -49,6 +49,7 @@ services:
       interval: 3s
       timeout: 3s
       retries: 5
+    restart: unless-stopped
 
   # 3. Distributed In-Order Event Commit Log Messaging Queue
   zookeeper:
@@ -56,8 +57,10 @@ services:
     container_name: apex-zookeeper
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
     networks:
       - apex-mesh-network
+    restart: unless-stopped
 
   kafka-broker:
     image: confluentinc/cp-kafka:7.5.0
@@ -69,17 +72,21 @@ services:
     environment:
       KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:29092,PLAINTEXT_HOST://0.0.0.0:9092
       KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka-broker:29092,PLAINTEXT_HOST://localhost:9092
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
+      KAFKA_HEAP_OPTS: '-Xms512M -Xmx1G'
     networks:
       - apex-mesh-network
     healthcheck:
-      test: ["CMD", "kafka-topics", "--bootstrap-server", "localhost:9092", "--list"]
+      test: ["CMD-SHELL", "kafka-topics --bootstrap-server kafka-broker:29092 --list > /dev/null 2>&1"]
       interval: 5s
       timeout: 5s
       retries: 5
+    restart: unless-stopped
 
   # 4. FastAPI Analytics Core Engine & Event Consumer Worker
   fastapi-app:
@@ -99,14 +106,32 @@ services:
       kafka-broker:
         condition: service_healthy
     volumes:
-      - ./data:/app/data
+      - ./data:/app/data:cached
     networks:
       - apex-mesh-network
-    # Initializes database tables and launches BOTH the consumer thread and server thread concurrently
-    command: >
-      sh -c "python -c 'from db import init_db; init_db()' && 
-            python ingestion.py & 
-            uvicorn main:app --host 0.0.0.0 --port 8000 --reload"
+    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]
+    restart: unless-stopped
+
+  ingestion-worker:
+    build:
+      context: ./app
+      dockerfile: Dockerfile
+    container_name: apex-ingestion-worker
+    env_file:
+      - .env
+    depends_on:
+      postgres-db:
+        condition: service_healthy
+      redis-cache:
+        condition: service_healthy
+      kafka-broker:
+        condition: service_healthy
+    volumes:
+      - ./data:/app/data:cached
+    networks:
+      - apex-mesh-network
+    command: ["sh", "-c", "python -c 'from db import init_db; init_db()' && exec python ingestion.py"]
+    restart: unless-stopped
 
   # 5. Live Streaming Retail Presentation UI Dashboard
   web-dashboard:
@@ -115,11 +140,12 @@ services:
     ports:
       - "8080:80"
     volumes:
-      - ./dashboard:/usr/share/nginx/html
+      - ./dashboard:/usr/share/nginx/html:ro
     networks:
       - apex-mesh-network
     depends_on:
       - fastapi-app
+    restart: unless-stopped
 
 volumes:
   postgres_data:

@@ -1,6 +1,6 @@
-ultralytics
-opencv-python-headless
-numpy
+ultralytics==8.4.60
+opencv-python==4.8.0.76
+numpy==1.26.4
 pandas
-kafka-python
+kafka-python-ng
 scipy

@@ -1,36 +1,54 @@
 import redis
-from datetime import datetime
+from datetime import datetime, timedelta
 from db import get_db_connection
 
-def evaluate_realtime_anomalies(store_id: str, r_client: redis.Redis):
-    """
-    Scans live telemetry states against thresholds to detect operational exceptions.
-    Returns generated alerts list.
-    """
+
+def evaluate_realtime_anomalies(store_code: str, r_client: redis.Redis):
     alerts = []
-    
-    # Anomaly Rule A: Long Billing Queue Detection
-    # Extract instantaneous depth metric from hot path Redis store
-    live_queue_depth = r_client.hget(f"store:{store_id}:live_metrics", "queue_depth")
-    
-    if live_queue_depth and int(live_queue_depth) > 15:
+    queue_depth = r_client.hget(f"store:{store_code}:live_metrics", "queue_depth")
+    if queue_depth is not None and int(queue_depth) > 15:
         alerts.append({
             "anomaly_type": "QUEUE_SPIKE",
             "severity": "CRITICAL",
-            "description": f"Billing line layout exceeded 15 people. Live Headcount: {live_queue_depth}."
+            "description": f"Live billing queue exceeded 15 visitors ({queue_depth}).",
+            "timestamp": datetime.utcnow().isoformat(),
         })
-        
-    # Write any caught anomalies down to PostgreSQL for audit logs
-    if alerts:
-        conn = get_db_connection()
+
+    conn = get_db_connection()
+    try:
         cur = conn.cursor()
-        for alert in alerts:
-            cur.execute("""
-                INSERT INTO store_anomalies (store_id, anomaly_type, severity, description, timestamp)
-                VALUES (%s, %s, %s, %s, NOW());
-            """, (store_id, alert["anomaly_type"], alert["severity"], alert["description"]))
-        conn.commit()
-        cur.close()
+        cutoff = datetime.utcnow() - timedelta(minutes=5)
+        cur.execute(
+            """
+                SELECT anomaly_type, description, id_token, timestamp
+                FROM store_anomalies
+                WHERE store_code = %s
+                  AND timestamp > %s
+                ORDER BY timestamp DESC
+                LIMIT 10;
+            """,
+            (store_code, cutoff),
+        )
+        rows = cur.fetchall()
+        for anomaly_type, description, id_token, timestamp in rows:
+            severity = "CRITICAL" if anomaly_type == "THEFT_SUSPICION_ANOMALY" else "WARNING"
+            alerts.append({
+                "anomaly_type": anomaly_type,
+                "severity": severity,
+                "description": description,
+                "id_token": id_token,
+                "timestamp": timestamp.isoformat() if hasattr(timestamp, "isoformat") else str(timestamp),
+            })
+    finally:
         conn.close()
-        
+
+    anomaly_key = f"store:{store_code}:anomalies_24h"
+    if r_client.llen(anomaly_key) > 20:
+        alerts.append({
+            "anomaly_type": "ANOMALY_SURGE",
+            "severity": "WARNING",
+            "description": "Persistent anomaly surge in the last 24 hours.",
+            "timestamp": datetime.utcnow().isoformat(),
+        })
+
     return alerts

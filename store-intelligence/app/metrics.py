@@ -1,90 +1,106 @@
-from datetime import timedelta
-import psycopg2
 from db import get_db_connection
+from datetime import timedelta
 
-def calculate_store_metrics(store_id: str, start_time, end_time):
-    """
-    Computes real-time traffic statistics, unique customer visits, 
-    and transaction-correlated conversion rates.
-    """
+
+def calculate_store_metrics(store_code: str, start_time, end_time):
     conn = get_db_connection()
-    cur = conn.cursor()
-    
-    # 1. Gather Total Unique Foot Traffic Count (Excluding Staff Logs)
-    cur.execute("""
-        SELECT COUNT(DISTINCT visitor_id) 
-        FROM store_events 
-        WHERE store_id = %s 
-          AND timestamp BETWEEN %s AND %s
-          AND is_staff = FALSE;
-    """, (store_id, start_time, end_time))
-    unique_visitors = cur.fetchone()[0] or 0
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+                SELECT COUNT(DISTINCT id_token)
+                FROM store_events
+                WHERE store_code = %s
+                  AND timestamp BETWEEN %s AND %s
+                  AND is_staff = FALSE
+                  AND event_type = 'entry'
+            """,
+            (store_code, start_time, end_time),
+        )
+        total_customers = cur.fetchone()[0] or 0
 
-    if unique_visitors == 0:
-        cur.close()
-        conn.close()
-        return {
-            "total_unique_customers": 0,
-            "total_transactions": 0,
-            "conversion_rate_percentage": 0.0,
-            "avg_dwell_time_minutes": 0.0
+        cur.execute(
+            """
+                SELECT AVG(dwell_ms)
+                FROM store_events
+                WHERE store_code = %s
+                  AND timestamp BETWEEN %s AND %s
+                  AND event_type = 'zone_dwell'
+            """,
+            (store_code, start_time, end_time),
+        )
+        avg_dwell_ms = cur.fetchone()[0] or 0
+        avg_dwell_minutes = round((avg_dwell_ms / 1000.0) / 60.0, 2)
+
+        cur.execute(
+            """
+                SELECT COUNT(DISTINCT id_token)
+                FROM store_events
+                WHERE store_code = %s
+                  AND event_type = 'queue_join'
+                  AND timestamp BETWEEN %s AND %s
+                  AND is_staff = FALSE
+            """,
+            (store_code, start_time, end_time),
+        )
+        queue_visitors = cur.fetchone()[0] or 0
+
+        cur.execute(
+            """
+                SELECT COUNT(DISTINCT id_token)
+                FROM store_events
+                WHERE store_code = %s
+                  AND event_type = 'exit'
+                  AND timestamp BETWEEN %s AND %s
+                  AND is_staff = FALSE
+            """,
+            (store_code, start_time, end_time),
+        )
+        exits = cur.fetchone()[0] or 0
+
+        cur.execute(
+            """
+                SELECT COUNT(DISTINCT id_token)
+                FROM store_events
+                WHERE store_code = %s
+                  AND event_type = 'exit'
+                  AND zone_id = 'ZONE_2'
+                  AND timestamp BETWEEN %s AND %s
+                  AND is_staff = FALSE
+            """,
+            (store_code, start_time, end_time),
+        )
+        potential_conversions = cur.fetchone()[0] or 0
+
+        cur.execute(
+            """
+                SELECT AVG(EXTRACT(EPOCH FROM (timestamp - join_events.timestamp)))
+                FROM store_events join_events
+                INNER JOIN store_events exit_events
+                ON join_events.id_token = exit_events.id_token
+                WHERE join_events.store_code = %s
+                  AND join_events.event_type = 'queue_join'
+                  AND exit_events.store_code = %s
+                  AND exit_events.event_type = 'exit'
+                  AND exit_events.zone_id = 'ZONE_2'
+                  AND join_events.timestamp BETWEEN %s AND %s
+                  AND exit_events.timestamp BETWEEN %s AND %s
+                  AND exit_events.timestamp > join_events.timestamp
+                  AND EXTRACT(EPOCH FROM (exit_events.timestamp - join_events.timestamp)) < 3600
+            """,
+            (store_code, store_code, start_time, end_time, start_time, end_time),
+        )
+        avg_queue_wait_seconds = cur.fetchone()[0] or 0.0
+
+        metrics = {
+            "total_unique_customers": total_customers,
+            "total_queue_visitors": queue_visitors,
+            "total_exits": exits,
+            "total_potential_conversions": potential_conversions,
+            "conversion_rate_percentage": round((potential_conversions / total_customers * 100.0) if total_customers > 0 else 0.0, 2),
+            "avg_dwell_time_minutes": avg_dwell_minutes,
+            "avg_queue_wait_time_seconds": round(avg_queue_wait_seconds, 2),
         }
-
-    # 2. Extract Average Dwell Time per Unique Customer Session
-    cur.execute("""
-        SELECT AVG(dwell_ms) 
-        FROM store_events 
-        WHERE store_id = %s 
-          AND timestamp BETWEEN %s AND %s
-          AND event_type = 'ZONE_DWELL';
-    """, (store_id, start_time, end_time))
-    avg_dwell_ms = cur.fetchone()[0] or 0
-    avg_dwell_mins = (avg_dwell_ms / 1000) / 60
-
-    # 3. Time-Window Correlation (No Customer IDs) Strategy
-    # Pull all unique non-staff visitors who were detected in the BILLING_ZONE
-    cur.execute("""
-        SELECT visitor_id, timestamp 
-        FROM store_events
-        WHERE store_id = %s 
-          AND event_type = 'BILLING_QUEUE_JOIN'
-          AND timestamp BETWEEN %s AND %s
-          AND is_staff = FALSE;
-    """, (store_id, start_time, end_time))
-    billing_visitors = cur.fetchall()
-
-    # Pull all actual sales transactions registered inside the store
-    cur.execute("""
-        SELECT transaction_id, timestamp, amount 
-        FROM pos_transactions
-        WHERE store_id = %s 
-          AND timestamp BETWEEN %s AND %s;
-    """, (store_id, start_time, end_time))
-    transactions = cur.fetchall()
-
-    # Match conversion windows: If a unique visitor was standing in the billing queue
-    # in the 5-minute window immediately BEFORE a transaction hit the POS system, 
-    # flag that visitor session as a converted purchase.
-    converted_visitors = set()
-    total_sales_count = len(transactions)
-
-    for tx_id, tx_time, amt in transactions:
-        for visitor_id, queue_join_time in billing_visitors:
-            # 5-minute lookback envelope
-            window_start = tx_time - timedelta(minutes=5)
-            if window_start <= queue_join_time <= tx_time:
-                converted_visitors.add(visitor_id)
-                break # Move to next transaction once a match is found
-
-    conversion_count = len(converted_visitors)
-    conversion_rate = (conversion_count / unique_visitors) * 100
-
-    cur.close()
-    conn.close()
-
-    return {
-        "total_unique_customers": unique_visitors,
-        "total_transactions": total_sales_count,
-        "conversion_rate_percentage": round(conversion_rate, 2),
-        "avg_dwell_time_minutes": round(avg_dwell_mins, 2)
-    }
+        return metrics
+    finally:
+        conn.close()

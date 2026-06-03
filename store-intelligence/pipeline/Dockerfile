@@ -22,4 +22,4 @@ RUN pip install --upgrade pip && \
 COPY . .
 
 # Wait for Kafka before starting pipeline
-CMD ["sh", "-c", "sleep 15 && python detect.py"]
+CMD ["python", "detect.py"]

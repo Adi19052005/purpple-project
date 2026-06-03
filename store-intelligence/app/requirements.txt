@@ -3,4 +3,7 @@ uvicorn==0.27.0
 pydantic==2.6.1
 psycopg2-binary==2.9.9
 redis==5.0.1
-asyncio==3.4.3
+kafka-python-ng
+opencv-python==4.8.0.76
+ultralytics==8.4.60
+numpy==1.26.4

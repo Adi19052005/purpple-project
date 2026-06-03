@@ -1,71 +1,482 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Apex Eye - Store Intelligence Dashboard</title>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ST1076 Retail Intelligence HUD</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <style>
+        body {
+            background: radial-gradient(circle at top left, rgba(96, 165, 250, 0.12), transparent 32%),
+                #05070f;
+            color: #d1d5db;
+            min-height: 100vh;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+        }
+
+        .scrollbar-thin::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        .scrollbar-thin::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        .scrollbar-thin::-webkit-scrollbar-thumb {
+            background: rgba(148, 163, 184, 0.28);
+            border-radius: 999px;
+        }
+
+        .glow-card {
+            background: rgba(15, 23, 42, 0.94);
+            border: 1px solid rgba(148, 163, 184, 0.08);
+            box-shadow: 0 24px 80px rgba(30, 64, 175, 0.14);
+            backdrop-filter: blur(12px);
+        }
+    </style>
 </head>
-<body class="bg-gray-950 text-gray-100 min-h-screen font-sans">
-    <header class="border-b border-gray-800 bg-gray-900 px-6 py-4 flex justify-between items-center">
-        <div class="flex items-center space-x-3">
-            <div class="h-3 w-3 rounded-full bg-emerald-500 animate-pulse"></div>
-            <h1 class="text-xl font-bold tracking-tight text-white">PROJECT APEXEYE // LIVE STREAM</h1>
-        </div>
-        <div class="text-sm text-gray-400 bg-gray-800 px-3 py-1 rounded border border-gray-700">
-            Target Unit: <span id="active-store-id" class="text-emerald-400 font-mono font-bold">STORE_BLR_002</span>
-        </div>
-    </header>
-
-    <main class="p-6 max-w-7xl mx-auto space-y-6">
-        <section class="grid grid-cols-1 md:grid-cols-4 gap-4">
-            <div class="bg-gray-900 border border-gray-800 p-5 rounded-lg">
-                <p class="text-xs font-semibold uppercase tracking-wider text-gray-400">Unique Traffic</p>
-                <h3 id="stat-traffic" class="text-3xl font-mono font-bold text-white mt-2">0</h3>
-            </div>
-            <div class="bg-gray-900 border border-gray-800 p-5 rounded-lg">
-                <p class="text-xs font-semibold uppercase tracking-wider text-gray-400">POS Sales Transactions</p>
-                <h3 id="stat-sales" class="text-3xl font-mono font-bold text-white mt-2">0</h3>
-            </div>
-            <div class="bg-gray-900 border border-gray-800 p-5 rounded-lg">
-                <p class="text-xs font-semibold uppercase tracking-wider text-gray-400">Conversion Rate</p>
-                <h3 id="stat-conversion" class="text-3xl font-mono font-bold text-emerald-400 mt-2">0.0%</h3>
-            </div>
-            <div class="bg-gray-900 border border-gray-800 p-5 rounded-lg">
-                <p class="text-xs font-semibold uppercase tracking-wider text-gray-400">Live Queue Depth</p>
-                <h3 id="stat-queue" class="text-3xl font-mono font-bold text-amber-500 mt-2">0</h3>
-            </div>
-        </section>
-
-        <section class="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            <div class="lg:col-span-2 bg-gray-900 border border-gray-800 p-6 rounded-lg flex flex-col">
-                <h2 class="text-sm font-semibold uppercase tracking-wider text-gray-300 mb-4">Journey Funnel Drop-offs</h2>
-                <div class="relative flex-grow h-64">
-                    <canvas id="funnelChart"></canvas>
+<body>
+    <div class="min-h-screen px-6 py-6">
+        <header class="sticky top-0 z-40 mb-6 rounded-[2rem] border border-slate-800 bg-slate-950/95 px-6 py-5 shadow-[0_0_70px_rgba(15,23,42,0.5)] backdrop-blur-xl">
+            <div class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                <div class="flex items-center gap-4">
+                    <span class="inline-flex h-3 w-3 rounded-full bg-emerald-400 animate-pulse"></span>
+                    <div>
+                        <p class="text-xs uppercase tracking-[0.4em] text-slate-500">Edge Retail Telemetry</p>
+                        <h1 class="text-3xl font-semibold text-white">ST1076 Intelligence Dashboard</h1>
+                    </div>
+                </div>
+                <div class="flex flex-wrap items-center gap-3">
+                    <div class="rounded-3xl border border-violet-500/15 bg-slate-900/90 px-4 py-2 text-sm text-slate-300">API: <span class="font-semibold text-white">http://localhost:8000</span></div>
+                    <label class="inline-flex cursor-pointer items-center gap-3 rounded-3xl border border-slate-800 bg-slate-900/95 px-4 py-2 text-sm text-slate-200 transition hover:border-cyan-400">
+                        <span>Simulate Local Telemetry Stream</span>
+                        <input id="simulateToggle" type="checkbox" class="h-5 w-10 rounded-full accent-cyan-400" />
+                    </label>
+                    <div id="modeBadge" class="rounded-full border border-emerald-500 bg-emerald-500/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.25em] text-emerald-300">LIVE</div>
                 </div>
             </div>
-            
-            <div class="bg-gray-900 border border-gray-800 p-6 rounded-lg flex flex-col h-[320px]">
-                <h2 class="text-sm font-semibold uppercase tracking-wider text-gray-300 mb-4">Live Event Telemetry Log</h2>
-                <div id="log-feed" class="flex-grow overflow-y-auto space-y-2 font-mono text-xs text-gray-400 pr-2 scrollbar-thin">
-                    <div class="text-gray-500 italic">Awaiting connection initialization to Kafka stream...</div>
-                </div>
-            </div>
-        </section>
+        </header>
 
-        <section class="bg-gray-900 border border-gray-800 p-6 rounded-lg">
-            <h2 class="text-sm font-semibold uppercase tracking-wider text-red-400 mb-4 flex items-center space-x-2">
-                <span>⚠️ Operational Exceptions & Anomalies</span>
-            </h2>
-            <div id="anomaly-container" class="grid grid-cols-1 md:grid-cols-2 gap-3">
-                <div class="text-sm text-gray-500 italic p-4 bg-gray-950 rounded border border-gray-800">
-                    No active behavioral anomalies or metric threshold breaks detected in this window.
-                </div>
-            </div>
-        </section>
-    </main>
+        <main class="mx-auto grid max-w-7xl gap-6">
+            <section class="grid gap-4 md:grid-cols-3">
+                <article class="glow-card rounded-[2rem] p-6">
+                    <p class="text-xs uppercase tracking-[0.3em] text-slate-500">Live Occupancy</p>
+                    <h2 id="occupancyValue" class="mt-4 text-5xl font-semibold text-white">0</h2>
+                    <p class="mt-3 text-sm text-slate-400">Active tracked customers inside the store.</p>
+                </article>
+                <article class="glow-card rounded-[2rem] p-6">
+                    <p class="text-xs uppercase tracking-[0.3em] text-slate-500">Active Queue Depth</p>
+                    <h2 id="queueDepthValue" class="mt-4 text-5xl font-semibold text-amber-400">0</h2>
+                    <p class="mt-3 text-sm text-slate-400">Customers currently in the billing counter queue.</p>
+                </article>
+                <article class="glow-card rounded-[2rem] p-6">
+                    <p class="text-xs uppercase tracking-[0.3em] text-slate-500">Live Conversion Rate</p>
+                    <h2 id="conversionValue" class="mt-4 text-5xl font-semibold text-emerald-400">0%</h2>
+                    <p class="mt-3 text-sm text-slate-400">Checkout completions over customer entries.</p>
+                </article>
+            </section>
 
-    <script src="app.js"></script>
+            <section class="grid gap-4 md:grid-cols-3">
+                <article class="glow-card rounded-[1.75rem] p-5">
+                    <p class="text-[0.65rem] uppercase tracking-[0.35em] text-slate-500">Average Queue Wait</p>
+                    <p id="metric-queue-wait" class="mt-3 text-3xl font-semibold text-slate-100">0 sec</p>
+                </article>
+                <article class="glow-card rounded-[1.75rem] p-5">
+                    <p class="text-[0.65rem] uppercase tracking-[0.35em] text-slate-500">Zone 1 Dwell</p>
+                    <p id="metric-dwell" class="mt-3 text-3xl font-semibold text-slate-100">0 min</p>
+                </article>
+                <article class="glow-card rounded-[1.75rem] p-5">
+                    <p class="text-[0.65rem] uppercase tracking-[0.35em] text-slate-500">Conversion Output</p>
+                    <p id="metric-total-conv" class="mt-3 text-3xl font-semibold text-emerald-300">0%</p>
+                </article>
+            </section>
+
+            <section class="grid gap-6 xl:grid-cols-[1.7fr_1fr]">
+                <div class="glow-card rounded-[2rem] p-6">
+                    <div class="mb-5 flex items-center justify-between gap-4">
+                        <div>
+                            <p class="text-xs uppercase tracking-[0.3em] text-slate-500">Customer Funnel</p>
+                            <h2 class="mt-2 text-2xl font-semibold text-white">Checkout Pipeline</h2>
+                        </div>
+                        <span id="funnelStatus" class="rounded-full bg-slate-800 px-3 py-1 text-xs font-semibold uppercase tracking-[0.25em] text-slate-300">Polling 2s</span>
+                    </div>
+                    <div class="h-[420px]"><canvas id="funnelChart" class="h-full w-full"></canvas></div>
+                </div>
+
+                <div class="glow-card rounded-[2rem] p-6">
+                    <div class="mb-5 flex items-center justify-between gap-4">
+                        <div>
+                            <p class="text-xs uppercase tracking-[0.3em] text-slate-500">Heatmap Overlay</p>
+                            <h2 class="mt-2 text-2xl font-semibold text-white">Spatial Density</h2>
+                        </div>
+                        <span id="heatmapStatus" class="rounded-full bg-slate-800 px-3 py-1 text-xs font-semibold uppercase tracking-[0.25em] text-slate-300">Polling 1s</span>
+                    </div>
+                    <div id="heatmapFrame" class="relative overflow-hidden rounded-[1.75rem] border border-slate-800 bg-slate-950" style="aspect-ratio: 3 / 4;">
+                        <canvas id="heatmapCanvas" class="absolute inset-0 h-full w-full"></canvas>
+                        <div class="pointer-events-none absolute inset-0 bg-[linear-gradient(90deg,rgba(148,163,184,0.03)_1px,transparent_1px)] bg-[length:40px_40px]"></div>
+                    </div>
+                    <p class="mt-4 text-sm leading-6 text-slate-400">Normalized coordinates render directly onto the active plan canvas.</p>
+                </div>
+            </section>
+
+            <section class="grid gap-6 lg:grid-cols-[2fr_1fr]">
+                <div class="glow-card rounded-[2rem] p-6">
+                    <div class="mb-5 flex items-center justify-between gap-4">
+                        <div>
+                            <p class="text-xs uppercase tracking-[0.3em] text-slate-500">System Anomalies</p>
+                            <h2 class="mt-2 text-2xl font-semibold text-white">Real-Time Alert Console</h2>
+                        </div>
+                        <span class="rounded-full bg-slate-800 px-3 py-1 text-xs font-semibold uppercase tracking-[0.25em] text-slate-300">Polling 2s</span>
+                    </div>
+                    <div id="logFeed" class="min-h-[420px] overflow-y-auto rounded-[1.75rem] border border-slate-800 bg-slate-950 p-4 text-sm leading-6 text-slate-300 scrollbar-thin"></div>
+                </div>
+
+                <div class="glow-card rounded-[2rem] p-6">
+                    <p class="text-xs uppercase tracking-[0.3em] text-slate-500">Telemetry Protocol</p>
+                    <h2 class="mt-2 text-2xl font-semibold text-white">Simulation Control</h2>
+                    <div class="mt-6 space-y-5 text-slate-300">
+                        <div class="rounded-3xl border border-slate-800 bg-slate-950 p-5">
+                            <p class="text-sm text-slate-400">When enabled, this dashboard bypasses backend polling and generates mock events, heatmap blooms, funnel data, and anomaly alerts locally.</p>
+                        </div>
+                        <div class="rounded-3xl border border-slate-800 bg-slate-950 p-5">
+                            <p class="text-sm"><span class="font-semibold text-slate-100">Status:</span> <span id="simulationState">Disabled</span></p>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <script>
+        const STORE_CODE = 'ST1076';
+        const BASE_URL = 'http://localhost:8000';
+        const ENDPOINTS = {
+            metrics: `${BASE_URL}/stores/${STORE_CODE}/metrics`,
+            funnel: `${BASE_URL}/stores/${STORE_CODE}/funnel`,
+            anomalies: `${BASE_URL}/stores/${STORE_CODE}/anomalies`,
+            heatmaps: `${BASE_URL}/stores/${STORE_CODE}/heatmaps`,
+        };
+
+        let simulateMode = false;
+        let metricsTimer = null;
+        let funnelTimer = null;
+        let anomaliesTimer = null;
+        let heatmapTimer = null;
+        let funnelChart = null;
+        let latestMetrics = { occupancy: 0, queue: 0, conversion: 0 };
+
+        const occupancyElement = document.getElementById('occupancyValue');
+        const queueElement = document.getElementById('queueDepthValue');
+        const conversionElement = document.getElementById('conversionValue');
+        const queueWaitElement = document.getElementById('metric-queue-wait');
+        const dwellElement = document.getElementById('metric-dwell');
+        const totalConvElement = document.getElementById('metric-total-conv');
+        const simulationState = document.getElementById('simulationState');
+        const modeBadge = document.getElementById('modeBadge');
+        const logFeed = document.getElementById('logFeed');
+        const simulateToggle = document.getElementById('simulateToggle');
+        const heatmapCanvas = document.getElementById('heatmapCanvas');
+        const heatmapContext = heatmapCanvas.getContext('2d');
+
+        function clamp(value, min, max) {
+            return Math.min(Math.max(value, min), max);
+        }
+
+        function animateValue(element, start, end, suffix = '') {
+            const delta = end - start;
+            const startTime = performance.now();
+            function step(now) {
+                const progress = Math.min((now - startTime) / 500, 1);
+                const current = start + delta * progress;
+                element.textContent = `${Math.round(current)}${suffix}`;
+                if (progress < 1) requestAnimationFrame(step);
+            }
+            requestAnimationFrame(step);
+        }
+
+        function buildFunnelChart() {
+            const ctx = document.getElementById('funnelChart').getContext('2d');
+            funnelChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: ['Entries', 'Zone 1', 'Queue Join', 'Checkout'],
+                    datasets: [{
+                        label: 'Visitor Count',
+                        data: [0, 0, 0, 0],
+                        backgroundColor: ['#818cf8', '#38bdf8', '#facc15', '#34d399'],
+                        borderRadius: 18,
+                        barThickness: 22,
+                    }],
+                },
+                options: {
+                    indexAxis: 'y',
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { display: false } },
+                    scales: {
+                        x: { grid: { color: 'rgba(148,163,184,0.12)' }, ticks: { color: '#cbd5e1' } },
+                        y: { grid: { display: false }, ticks: { color: '#cbd5e1' } },
+                    },
+                },
+            });
+        }
+
+        function updateFunnelChart(data) {
+            if (!funnelChart) return;
+            const values = Array.isArray(data.funnel_stages) ? data.funnel_stages.map(stage => Number(stage.count || 0)) : [0, 0, 0, 0];
+            funnelChart.data.datasets[0].data = values;
+            funnelChart.update();
+        }
+
+        function appendLog(message, severity = 'INFO') {
+            const line = document.createElement('div');
+            line.className = 'mb-2 rounded-2xl border px-4 py-3 text-xs leading-6';
+            const styleClass = severity === 'CRITICAL'
+                ? 'text-rose-200 border-rose-500/30 bg-rose-500/10'
+                : severity === 'WARNING'
+                    ? 'text-amber-200 border-amber-500/30 bg-amber-500/10'
+                    : 'text-slate-300 border-slate-700/50 bg-slate-800/80';
+            line.className += ` ${styleClass}`;
+            line.innerHTML = `<span class="font-semibold uppercase tracking-[0.18em]">[${severity}]</span> ${message}`;
+            logFeed.prepend(line);
+            while (logFeed.children.length > 60) {
+                logFeed.removeChild(logFeed.lastChild);
+            }
+        }
+
+        function refreshModeBadge() {
+            modeBadge.textContent = simulateMode ? 'SIMULATION' : 'LIVE';
+            modeBadge.className = simulateMode
+                ? 'rounded-full border border-cyan-400 bg-cyan-400/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.25em] text-cyan-300'
+                : 'rounded-full border border-emerald-500 bg-emerald-500/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.25em] text-emerald-300';
+        }
+
+        function updateMetricsUI(data) {
+            const occupancy = Number(data.occupancy || 0);
+            const queue = Number(data.queue_depth || 0);
+            const conversion = Number(data.conversion_rate || 0);
+            animateValue(occupancyElement, latestMetrics.occupancy, occupancy);
+            animateValue(queueElement, latestMetrics.queue, queue);
+            animateValue(conversionElement, latestMetrics.conversion, conversion, '%');
+            queueWaitElement.textContent = `${(data.avg_queue_wait_time_seconds || 0).toFixed(1)} sec`;
+            dwellElement.textContent = `${(data.avg_dwell_time_minutes || 0).toFixed(1)} min`;
+            totalConvElement.textContent = `${conversion.toFixed(1)}%`;
+            latestMetrics = { occupancy, queue, conversion };
+        }
+
+        function drawBlueprint() {
+            const width = heatmapCanvas.parentElement.clientWidth;
+            const height = heatmapCanvas.parentElement.clientHeight;
+            heatmapCanvas.width = width * (window.devicePixelRatio || 1);
+            heatmapCanvas.height = height * (window.devicePixelRatio || 1);
+            heatmapCanvas.style.width = `${width}px`;
+            heatmapCanvas.style.height = `${height}px`;
+            heatmapContext.setTransform(window.devicePixelRatio || 1, 0, 0, window.devicePixelRatio || 1, 0, 0);
+            heatmapContext.clearRect(0, 0, width, height);
+            heatmapContext.fillStyle = '#0b1220';
+            heatmapContext.fillRect(0, 0, width, height);
+            heatmapContext.strokeStyle = 'rgba(148,163,184,0.12)';
+            heatmapContext.lineWidth = 1;
+            for (let x = 0; x < width; x += 48) {
+                heatmapContext.beginPath();
+                heatmapContext.moveTo(x, 0);
+                heatmapContext.lineTo(x, height);
+                heatmapContext.stroke();
+            }
+            for (let y = 0; y < height; y += 48) {
+                heatmapContext.beginPath();
+                heatmapContext.moveTo(0, y);
+                heatmapContext.lineTo(width, y);
+                heatmapContext.stroke();
+            }
+        }
+
+        function renderHeatmap(points) {
+            drawBlueprint();
+            heatmapContext.globalCompositeOperation = 'lighter';
+            points.slice(-800).forEach(point => {
+                const x = clamp(Number(point.x || 0), 0, 1) * heatmapCanvas.parentElement.clientWidth;
+                const y = clamp(Number(point.y || 0), 0, 1) * heatmapCanvas.parentElement.clientHeight;
+                const radius = 18 + Math.random() * 16;
+                const gradient = heatmapContext.createRadialGradient(x, y, 0, x, y, radius);
+                gradient.addColorStop(0, 'rgba(250, 204, 21, 0.55)');
+                gradient.addColorStop(0.35, 'rgba(248, 113, 113, 0.26)');
+                gradient.addColorStop(1, 'rgba(248, 113, 113, 0)');
+                heatmapContext.fillStyle = gradient;
+                heatmapContext.beginPath();
+                heatmapContext.arc(x, y, radius, 0, Math.PI * 2);
+                heatmapContext.fill();
+            });
+            heatmapContext.globalCompositeOperation = 'source-over';
+        }
+
+        async function fetchJson(url) {
+            const response = await fetch(url, { cache: 'no-store' });
+            if (!response.ok) {
+                const message = await response.text();
+                throw new Error(`${response.status} ${message}`);
+            }
+            return response.json();
+        }
+
+        async function getMetrics() {
+            if (simulateMode) return;
+            try {
+                const data = await fetchJson(ENDPOINTS.metrics);
+                updateMetricsUI(data);
+            } catch (error) {
+                appendLog(`Metrics fetch failed: ${error.message}`, 'WARNING');
+            }
+        }
+
+        async function getFunnel() {
+            if (simulateMode) return;
+            try {
+                const data = await fetchJson(ENDPOINTS.funnel);
+                updateFunnelChart(data);
+            } catch (error) {
+                appendLog(`Funnel fetch failed: ${error.message}`, 'WARNING');
+            }
+        }
+
+        async function getAnomalies() {
+            if (simulateMode) return;
+            try {
+                const data = await fetchJson(ENDPOINTS.anomalies);
+                const items = Array.isArray(data.active_anomalies) ? data.active_anomalies : [];
+                if (!items.length) {
+                    appendLog('No active anomalies in this interval.', 'INFO');
+                }
+                items.slice(0, 12).forEach(item => {
+                    const severity = item.severity || 'WARNING';
+                    appendLog(`${new Date(item.timestamp).toLocaleTimeString()} • ${item.anomaly_type} — ${item.description}`, severity);
+                    if (severity === 'CRITICAL') {
+                        appendLog('CRITICAL event triggered.', 'CRITICAL');
+                    }
+                });
+            } catch (error) {
+                appendLog(`Anomalies fetch failed: ${error.message}`, 'WARNING');
+            }
+        }
+
+        async function getHeatmap() {
+            if (simulateMode) return;
+            try {
+                const data = await fetchJson(ENDPOINTS.heatmaps);
+                if (Array.isArray(data.coordinates)) {
+                    renderHeatmap(data.coordinates);
+                }
+            } catch (error) {
+                appendLog(`Heatmap fetch failed: ${error.message}`, 'WARNING');
+            }
+        }
+
+        function randomInt(min, max) {
+            return Math.floor(Math.random() * (max - min + 1)) + min;
+        }
+
+        function simulateMetrics() {
+            return {
+                occupancy: randomInt(60, 140),
+                queue_depth: randomInt(0, 28),
+                conversion_rate: Number((randomInt(12, 46) + Math.random()).toFixed(1)),
+                avg_queue_wait_time_seconds: Number((randomInt(15, 95) + Math.random()).toFixed(1)),
+                avg_dwell_time_minutes: Number((randomInt(2, 12) + Math.random()).toFixed(1)),
+            };
+        }
+
+        function simulateFunnel() {
+            const entries = randomInt(100, 170);
+            const browsing = Math.max(0, entries - randomInt(12, 36));
+            const queue = Math.max(0, browsing - randomInt(8, 24));
+            const checkout = Math.max(0, queue - randomInt(6, 18));
+            return { funnel_stages: [{ count: entries }, { count: browsing }, { count: queue }, { count: checkout }] };
+        }
+
+        function simulateAnomalies() {
+            const probability = Math.random();
+            if (probability < 0.45) {
+                appendLog('Simulation heartbeat: no alert detected.', 'INFO');
+                return;
+            }
+            const isCritical = Math.random() < 0.35;
+            const type = isCritical ? 'THEFT_SUSPICION_ANOMALY' : 'LONG_DWELL_ANOMALY';
+            appendLog(`${new Date().toLocaleTimeString()} • ${type} — ${isCritical ? 'Suspected bypass of billing queue.' : 'Extended browsing time in Zone 1.'}`, isCritical ? 'CRITICAL' : 'WARNING');
+        }
+
+        function simulateHeatmap() {
+            const points = [];
+            const baseX = 0.3 + Math.random() * 0.2;
+            const baseY = 0.3 + Math.random() * 0.2;
+            for (let i = 0; i < randomInt(45, 85); i++) {
+                points.push({
+                    x: clamp(baseX + (Math.random() - 0.5) * 0.24, 0, 1),
+                    y: clamp(baseY + (Math.random() - 0.5) * 0.24, 0, 1),
+                });
+            }
+            renderHeatmap(points);
+        }
+
+        function simulateCycle() {
+            if (!simulateMode) return;
+            updateMetricsUI(simulateMetrics());
+            updateFunnelChart(simulateFunnel());
+            simulateAnomalies();
+            simulateHeatmap();
+        }
+
+        function stopIntervals() {
+            clearInterval(metricsTimer);
+            clearInterval(funnelTimer);
+            clearInterval(anomaliesTimer);
+            clearInterval(heatmapTimer);
+        }
+
+        function startLivePolling() {
+            stopIntervals();
+            getMetrics();
+            getFunnel();
+            getAnomalies();
+            getHeatmap();
+            metricsTimer = setInterval(getMetrics, 1000);
+            funnelTimer = setInterval(getFunnel, 2000);
+            anomaliesTimer = setInterval(getAnomalies, 2000);
+            heatmapTimer = setInterval(getHeatmap, 1000);
+        }
+
+        function setSimulation(enabled) {
+            simulateMode = enabled;
+            simulationState.textContent = enabled ? 'Enabled' : 'Disabled';
+            refreshModeBadge();
+            logFeed.innerHTML = '';
+            if (enabled) {
+                appendLog('Simulation enabled. Live backend polling suspended.', 'INFO');
+                stopIntervals();
+                simulateCycle();
+                metricsTimer = setInterval(simulateCycle, 1000);
+                funnelTimer = setInterval(simulateCycle, 2000);
+                anomaliesTimer = setInterval(simulateAnomalies, 2400);
+                heatmapTimer = setInterval(simulateHeatmap, 1000);
+            } else {
+                appendLog('Live backend polling resumed.', 'INFO');
+                startLivePolling();
+            }
+        }
+
+        window.addEventListener('resize', () => {
+            drawBlueprint();
+        });
+
+        simulateToggle.addEventListener('change', event => {
+            setSimulation(event.target.checked);
+        });
+
+        document.addEventListener('DOMContentLoaded', () => {
+            buildFunnelChart();
+            refreshModeBadge();
+            setSimulation(false);
+        });
+    </script>
 </body>
 </html>

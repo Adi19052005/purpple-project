@@ -1,172 +1,261 @@
 import os
-import json
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from typing import Dict, List, Optional
+
 import cv2
 import numpy as np
-from ultralytics import YOLO
 from kafka import KafkaProducer
+from ultralytics import YOLO
 
 from tracker import AdvancedStoreTracker
 from zones import StoreZoneManager
 
-# --- Infrastructure Configurations ---
-KAFKA_BROKER = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka-broker:29092")
+STORE_ID = "STORE_BLR_002"
+STORE_CODE = "ST1076"
+CAMERA_ID = "CAM_MAIN_FLOOR_01"
 TOPIC_NAME = "retail-store-telemetry"
+KAFKA_BROKER = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
+FPS = 15.0
+DARK_VALUE_THRESHOLD = 50.0
+LOW_SATURATION_THRESHOLD = 40.0
+HEATMAP_BATCH_SIZE = 150
 
-# Initialize Production Kafka Producer
 producer = KafkaProducer(
     bootstrap_servers=[KAFKA_BROKER],
-    value_serializer=lambda v: json.dumps(v).encode('utf-8'),
-    acks='all' # Enforce strict persistence validation for idempotency integrity
+    value_serializer=lambda value: __import__("json").dumps(value).encode("utf-8"),
+    acks="all",
 )
 
-# --- Metadata Context Setup ---
-STORE_ID = "STORE_BLR_002"
-CAMERA_ID = "CAM_MAIN_FLOOR_01"  # Adjusted context for zone tracking
-FPS = 15.0
-START_TIME_UTC = datetime.utcnow()
 
-# Uniform HSV profile boundaries for staff classification (Teal/Blue Example)
-UNIFORM_HSV_LOW = [90, 50, 50]
-UNIFORM_HSV_HIGH = [130, 255, 255]
+def format_timestamp(frame_index: int) -> str:
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    return (now + timedelta(seconds=(frame_index / FPS))).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-# Virtual threshold line for entry/exit tracking
-GATE_LINE = ((200, 800), (1720, 800))
 
-def compute_frame_timestamp(frame_index):
-    """Calculates precision ISO-8601 UTC timestamp based on structural frame offset."""
-    offset_seconds = frame_index / FPS
-    target_dt = START_TIME_UTC + timedelta(seconds=offset_seconds)
-    return target_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+def build_payload(
+    event_type: str,
+    id_token: str,
+    timestamp: str,
+    zone_id: Optional[str],
+    is_staff: bool,
+    confidence: float,
+    additional_metadata: Optional[Dict] = None,
+    dwell_ms: int = 0,
+    gender_pred: Optional[str] = None,
+    age_bucket: Optional[str] = None,
+    wait_seconds: Optional[float] = None,
+    abandoned: bool = False,
+) -> Dict:
+    metadata = {
+        "session_seq": 1,
+        "anomalies": [],
+    }
+    if additional_metadata:
+        metadata.update(additional_metadata)
 
-def main_cv_loop(video_path):
-    # Initialize YOLOv8 Weights and Module Logic Engines
+    return {
+        "event_id": str(uuid.uuid4()),
+        "store_id": STORE_ID,
+        "store_code": STORE_CODE,
+        "camera_id": CAMERA_ID,
+        "id_token": id_token,
+        "event_type": event_type,
+        "timestamp": timestamp,
+        "zone_id": zone_id,
+        "dwell_ms": dwell_ms,
+        "is_staff": is_staff,
+        "confidence": float(round(confidence, 3)),
+        "gender_pred": gender_pred,
+        "age_bucket": age_bucket,
+        "wait_seconds": wait_seconds,
+        "abandoned": abandoned,
+        "metadata": metadata,
+    }
+
+
+def normalize_coordinate(x: float, y: float, frame_width: int, frame_height: int) -> List[float]:
+    return [round(float(x) / float(frame_width), 4), round(float(y) / float(frame_height), 4)]
+
+
+def main_cv_loop(video_path: str) -> None:
     model = YOLO("yolov8n.pt")
-    tracker = AdvancedStoreTracker(entry_line_coords=GATE_LINE)
+    tracker = AdvancedStoreTracker(entry_line_coords=StoreZoneManager().entry_line)
     zone_manager = StoreZoneManager()
-    
+
     cap = cv2.VideoCapture(video_path)
-    frame_idx = 0
-    
-    # Active state caches to track frame-by-frame delta movements
-    # track_id -> "ZONE_NAME" or None
-    visitor_zone_states = {}
-    # track_id -> timestamp_of_last_dwell_emit
-    visitor_dwell_timers = {}
+    if not cap.isOpened():
+        raise RuntimeError(f"Unable to open video source: {video_path}")
 
-    print(f"[*] Ingestion Pipeline started for Video Source: {video_path}")
+    frame_index = 0
+    zone_state: Dict[int, Optional[str]] = {}
+    dwell_start: Dict[int, datetime] = {}
+    heatmap_buffer: List[List[float]] = []
 
-    while cap.isOpened():
-        ret, frame = cap.read()
-        if not ret:
+    print(f"[*] Starting edge pipeline for {video_path}")
+
+    while True:
+        success, frame = cap.read()
+        if not success:
             break
-            
-        timestamp_str = compute_frame_timestamp(frame_idx)
-        current_time_dt = datetime.strptime(timestamp_str, "%Y-%m-%dT%H:%M:%SZ")
-        
-        # Invoke YOLOv8 + Native ByteTrack Execution
-        # Class 0 enforces tracking exclusively on the 'person' bounding box array
-        results = model.track(frame, persist=True, tracker="bytetrack.yaml", classes=[0], verbose=False)
-        
-        # Maintain active queue depth headcount matrix per frame
-        active_billing_queue_count = 0
-        
-        if results[0].boxes and results[0].boxes.id is not None:
-            boxes = results[0].boxes.xyxy.cpu().numpy()
-            track_ids = results[0].boxes.id.cpu().numpy().astype(int)
-            confidences = results[0].boxes.conf.cpu().numpy()
-            
-            # First pass: Calculate spatial presence variables for global frame states
-            for bbox in boxes:
-                x1, y1, x2, y2 = bbox
-                b_center = (int((x1 + x2) / 2), int(y2))
-                if zone_manager.check_zone_containment(b_center) == "BILLING_ZONE":
-                    active_billing_queue_count += 1
 
-            # Second pass: Process individual lifecycle tracking loops
-            for bbox, track_id, conf in zip(boxes, track_ids, confidences):
+        timestamp = format_timestamp(frame_index)
+        height, width = frame.shape[:2]
+        result = model.track(frame, persist=True, tracker="bytetrack.yaml", classes=[0], verbose=False)
+        active_queue_count = 0
+
+        if result and hasattr(result[0], "boxes") and result[0].boxes.id is not None:
+            boxes = result[0].boxes.xyxy.cpu().numpy()
+            track_ids = result[0].boxes.id.cpu().numpy().astype(int)
+            confidences = result[0].boxes.conf.cpu().numpy()
+
+            current_queue_members = []
+
+            for bbox, track_id, confidence in zip(boxes, track_ids, confidences):
                 x1, y1, x2, y2 = bbox
                 bottom_center = (int((x1 + x2) / 2), int(y2))
-                
-                # 1. Uniform matching for Staff Filter classification
-                is_staff = tracker.classify_staff(frame, bbox, track_id, UNIFORM_HSV_LOW, UNIFORM_HSV_HIGH)
-                visitor_id = f"VIS_{track_id:06d}"
-                
-                # Base Schema Generator Blueprint
-                def create_base_payload(event_type, zone_id=None, dwell_ms=0):
-                    return {
-                        "event_id": str(uuid.uuid4()),
-                        "store_id": STORE_ID,
-                        "camera_id": CAMERA_ID,
-                        "visitor_id": visitor_id,
-                        "event_type": event_type,
-                        "timestamp": timestamp_str,
-                        "zone_id": zone_id,
-                        "dwell_ms": dwell_ms,
-                        "is_staff": is_staff,
-                        "confidence": float(round(conf, 2)),
-                        "metadata": {
-                            "queue_depth": active_billing_queue_count if zone_id == "BILLING_ZONE" else None,
-                            "sku_zone": zone_id if zone_id in ["SKINCARE", "FRAGRANCE"] else None,
-                            "session_seq": 1
-                        }
-                    }
+                zone_label = zone_manager.check_zone_containment(bottom_center)
+                if zone_label == "ZONE_2":
+                    current_queue_members.append(track_id)
 
-                # 2. Check Line Boundary Intersections (Entry / Exit Directionality)
-                direction_event = tracker.is_crossing_line(track_id, bottom_center)
-                if direction_event:
-                    payload = create_base_payload(direction_event)
+            active_queue_count = len(current_queue_members)
+
+            for bbox, track_id, confidence in zip(boxes, track_ids, confidences):
+                x1, y1, x2, y2 = bbox
+                id_token = f"ID_{int(track_id)}"
+                bottom_center = (int((x1 + x2) / 2), int(y2))
+                is_staff = tracker.classify_staff(frame, bbox, track_id, DARK_VALUE_THRESHOLD, LOW_SATURATION_THRESHOLD)
+                zone_label = zone_manager.check_zone_containment(bottom_center)
+                previous_zone = zone_state.get(track_id)
+
+                crossing = tracker.is_crossing_line(track_id, bottom_center, current_frame_idx=frame_index)
+                if crossing:
+                    if crossing == "ENTRY":
+                        payload = build_payload(
+                            event_type="entry",
+                            id_token=id_token,
+                            timestamp=timestamp,
+                            zone_id="ENTRY_GATE",
+                            is_staff=is_staff,
+                            confidence=float(confidence),
+                            additional_metadata={"queue_depth": active_queue_count},
+                        )
+                    else:
+                        payload = build_payload(
+                            event_type="exit",
+                            id_token=id_token,
+                            timestamp=timestamp,
+                            zone_id="EXIT_GATE",
+                            is_staff=is_staff,
+                            confidence=float(confidence),
+                        )
                     producer.send(TOPIC_NAME, value=payload)
 
-                # 3. Dynamic Polygon Containment Evaluations (Zone Changes)
-                assigned_zone = zone_manager.check_zone_containment(bottom_center)
-                previous_zone = visitor_zone_states.get(track_id)
-                
-                if assigned_zone != previous_zone:
-                    # Case A: Left a distinct retail zone
+                if previous_zone != zone_label:
                     if previous_zone is not None:
-                        payload = create_base_payload("ZONE_EXIT", zone_id=previous_zone)
-                        producer.send(TOPIC_NAME, value=payload)
-                        # Clear active tracking timers
-                        visitor_dwell_timers.pop(track_id, None)
-                    
-                    # Case B: Entered a brand new retail zone boundary
-                    if assigned_zone is not None:
-                        event_type = "BILLING_QUEUE_JOIN" if assigned_zone == "BILLING_ZONE" else "ZONE_ENTER"
-                        payload = create_base_payload(event_type, zone_id=assigned_zone)
-                        producer.send(TOPIC_NAME, value=payload)
-                        # Instantiate tracking reference clock
-                        visitor_dwell_timers[track_id] = current_time_dt
-                        
-                    visitor_zone_states[track_id] = assigned_zone
-                
-                # 4. Process Interval Dwell Accumulators (Fulfills the 30s heartbeats rule)
-                if assigned_zone is not None and track_id in visitor_dwell_timers:
-                    start_dwell_time = visitor_dwell_timers[track_id]
-                    elapsed_delta = current_time_dt - start_dwell_time
-                    
-                    # If tracked person remains inside polygon space for > 30 seconds interval marks
-                    if elapsed_delta >= timedelta(seconds=30):
-                        payload = create_base_payload(
-                            "ZONE_DWELL", 
-                            zone_id=assigned_zone, 
-                            dwell_ms=int(elapsed_delta.total_seconds() * 1000)
+                        payload = build_payload(
+                            event_type="zone_exit",
+                            id_token=id_token,
+                            timestamp=timestamp,
+                            zone_id=previous_zone,
+                            is_staff=is_staff,
+                            confidence=float(confidence),
                         )
                         producer.send(TOPIC_NAME, value=payload)
-                        # Reset heartbeat timer mark to avoid immediate double-firing next frame
-                        visitor_dwell_timers[track_id] = current_time_dt
-        
-        frame_idx += 1
-        
+                        dwell_start.pop(track_id, None)
+
+                    if zone_label is not None:
+                        if zone_label == "ZONE_2":
+                            payload = build_payload(
+                                event_type="queue_join",
+                                id_token=id_token,
+                                timestamp=timestamp,
+                                zone_id=zone_label,
+                                is_staff=is_staff,
+                                confidence=float(confidence),
+                                additional_metadata={
+                                    "queue_depth": active_queue_count,
+                                    "queue_position_at_join": active_queue_count + 1,
+                                },
+                            )
+                        else:
+                            payload = build_payload(
+                                event_type="zone_enter",
+                                id_token=id_token,
+                                timestamp=timestamp,
+                                zone_id=zone_label,
+                                is_staff=is_staff,
+                                confidence=float(confidence),
+                            )
+
+                        producer.send(TOPIC_NAME, value=payload)
+                        dwell_start[track_id] = datetime.now(timezone.utc)
+
+                    zone_state[track_id] = zone_label
+
+                if zone_label == "ZONE_1" and not is_staff and track_id in dwell_start:
+                    elapsed = datetime.now(timezone.utc) - dwell_start[track_id]
+                    if elapsed.total_seconds() >= 30:
+                        payload = build_payload(
+                            event_type="zone_dwell",
+                            id_token=id_token,
+                            timestamp=timestamp,
+                            zone_id=zone_label,
+                            dwell_ms=int(elapsed.total_seconds() * 1000),
+                            is_staff=is_staff,
+                            confidence=float(confidence),
+                        )
+                        producer.send(TOPIC_NAME, value=payload)
+                        dwell_start[track_id] = datetime.now(timezone.utc)
+
+                heatmap_buffer.append(normalize_coordinate(bottom_center[0], bottom_center[1], width, height))
+
+        if frame_index > 0 and frame_index % HEATMAP_BATCH_SIZE == 0 and heatmap_buffer:
+            payload = build_payload(
+                event_type="zone_spatial_matrix",
+                id_token="ID_HEATMAP_BATCH",
+                timestamp=timestamp,
+                zone_id=None,
+                is_staff=False,
+                confidence=1.0,
+                additional_metadata={
+                    "spatial_coordinates": heatmap_buffer,
+                    "coordinate_count": len(heatmap_buffer),
+                    "batch_frame_index": frame_index,
+                },
+            )
+            producer.send(TOPIC_NAME, value=payload)
+            heatmap_buffer = []
+
+        frame_index += 1
+
     cap.release()
     producer.flush()
-    print(f"[+] Processing completed successfully for frame indices up to: {frame_idx}")
+    print(f"[+] Completed processing {frame_index} frames for {video_path}")
+
 
 if __name__ == "__main__":
-    # Point directly to the standard file structure pipeline mount path
-    video_target = "/app/data/clips/store_blr_002_floor.mp4"
-    if os.path.exists(video_target):
-        main_cv_loop(video_target)
-    else:
-        print(f"[-] Video file asset context not found at target: {video_target}")
+    clips_root = os.path.join(
+        os.path.dirname(__file__),
+        "..",
+        "data",
+        "clips"
+    )
+
+    video_files = []
+
+    for root, _, files in os.walk(clips_root):
+        for file in files:
+            if file.lower().endswith(".mp4"):
+                video_files.append(os.path.join(root, file))
+
+    if not video_files:
+        raise FileNotFoundError(
+            f"No MP4 files found under: {clips_root}"
+        )
+
+    print(f"[*] Found {len(video_files)} video files")
+
+    for video_path in sorted(video_files):
+        print(f"[*] Processing: {video_path}")
+        main_cv_loop(video_path)
