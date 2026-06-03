@@ -1,4 +1,4 @@
-You can paste the following directly as your `README.md`.
+
 
 # Store Intelligence Platform
 
