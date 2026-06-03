@@ -8,7 +8,8 @@ A real-time retail analytics platform that processes CCTV footage, generates beh
 
 ## Architecture
 
-![Architecture Diagram](docs/architecture.png)
+<img width="1397" height="697" alt="image" src="https://github.com/user-attachments/assets/0de42364-fa6d-43c6-8cf1-1ce1a346fc66" />
+
 
 > Save the architecture image you shared as `docs/architecture.png` and keep this reference in the README.
 
